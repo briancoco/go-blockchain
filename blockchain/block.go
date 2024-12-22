@@ -3,15 +3,26 @@ package blockchain
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/gob"
+	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/big"
 	"strconv"
 	"time"
+
+	"github.com/boltdb/bolt"
 )
 
 // Difficulty a given block was mined at
 const targetBits = 24
+
+// Database path
+const dbFile = "blockstore.db"
+
+// Database buckets
+const blocksBucket = "Blocks"
 
 type Block struct {
 	Timestamp     int64
@@ -22,21 +33,14 @@ type Block struct {
 }
 
 type Blockchain struct {
-	Blocks []*Block
+	tip []byte
+	db  *bolt.DB
 }
 
 type ProofOfWork struct {
 	block  *Block
 	target *big.Int
 }
-
-// func (b *Block) SetHash() {
-// 	timestamp := []byte(strconv.FormatInt(b.Timestamp, 10))
-// 	headers := bytes.Join([][]byte{b.PrevBlockHash, b.Data, timestamp}, []byte{})
-// 	hash := sha256.Sum256(headers)
-
-// 	b.Hash = hash[:]
-// }
 
 func NewBlock(data string, prevBlockHash []byte) *Block {
 	block := &Block{
@@ -55,10 +59,70 @@ func NewBlock(data string, prevBlockHash []byte) *Block {
 	return block
 }
 
+func (b *Block) Serialize() []byte {
+	var result bytes.Buffer
+
+	encoder := gob.NewEncoder(&result)
+	if err := encoder.Encode(b); err != nil {
+		log.Fatal(err)
+	}
+
+	return result.Bytes()
+}
+
+func DeseralizeBlock(d []byte) *Block {
+	var block Block
+
+	decoder := gob.NewDecoder(bytes.NewReader(d))
+	if err := decoder.Decode(&block); err != nil {
+		log.Fatal(err)
+	}
+
+	return &block
+}
+
 func (bc *Blockchain) AddBlock(data string) {
-	prevBlock := bc.Blocks[len(bc.Blocks)-1]
-	newBlock := NewBlock(data, prevBlock.Hash)
-	bc.Blocks = append(bc.Blocks, newBlock)
+	var lastHash []byte
+
+	//fetch last block
+	err := bc.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			return errors.New("error getting last block, could not find blocks bucket")
+		}
+		lastHash = b.Get([]byte("l"))
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	//construct/add new block
+	newBlock := NewBlock(data, lastHash)
+
+	err = bc.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			return errors.New("error adding block, could not find blocks bucket")
+		}
+
+		if err := b.Put(newBlock.Hash, newBlock.Serialize()); err != nil {
+			return err
+		}
+		if err := b.Put([]byte("l"), newBlock.Hash); err != nil {
+			return err
+		}
+		bc.tip = newBlock.Hash
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 // Blockchain needs an inital "Genesis" block to start
@@ -67,9 +131,34 @@ func NewGenesisBlock() *Block {
 }
 
 func NewBlockchain() *Blockchain {
-	return &Blockchain{
-		Blocks: []*Block{NewGenesisBlock()},
+	var tip []byte
+	db, err := bolt.Open(dbFile, 0600, nil)
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+
+		if b == nil {
+			//bucket doesn't exist
+			genesis := NewGenesisBlock()
+			b, _ := tx.CreateBucket([]byte(blocksBucket))
+			b.Put(genesis.Hash, genesis.Serialize())
+			b.Put([]byte("l"), genesis.Hash)
+			tip = genesis.Hash
+		} else {
+			//bucket does exist
+			tip = b.Get([]byte("l"))
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	bc := Blockchain{tip, db}
+
+	return &bc
 }
 
 // Specifies the requirements for the hash of a given block
