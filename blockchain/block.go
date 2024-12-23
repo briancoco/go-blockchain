@@ -34,12 +34,17 @@ type Block struct {
 
 type Blockchain struct {
 	tip []byte
-	db  *bolt.DB
+	Db  *bolt.DB
 }
 
 type ProofOfWork struct {
 	block  *Block
 	target *big.Int
+}
+
+type BlockchainIterator struct {
+	currentHash []byte
+	db          *bolt.DB
 }
 
 func NewBlock(data string, prevBlockHash []byte) *Block {
@@ -85,7 +90,7 @@ func (bc *Blockchain) AddBlock(data string) {
 	var lastHash []byte
 
 	//fetch last block
-	err := bc.db.View(func(tx *bolt.Tx) error {
+	err := bc.Db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
 		if b == nil {
 			return errors.New("error getting last block, could not find blocks bucket")
@@ -102,7 +107,7 @@ func (bc *Blockchain) AddBlock(data string) {
 	//construct/add new block
 	newBlock := NewBlock(data, lastHash)
 
-	err = bc.db.Update(func(tx *bolt.Tx) error {
+	err = bc.Db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(blocksBucket))
 		if b == nil {
 			return errors.New("error adding block, could not find blocks bucket")
@@ -221,4 +226,34 @@ func (pow *ProofOfWork) Validate() bool {
 	isValid := hashInt.Cmp(pow.target) == -1
 
 	return isValid
+}
+
+func (bc *Blockchain) Iterator() *BlockchainIterator {
+	bci := &BlockchainIterator{bc.tip, bc.Db}
+
+	return bci
+}
+
+func (i *BlockchainIterator) Next() *Block {
+	var block *Block
+
+	//fetch the current block from db
+	err := i.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(blocksBucket))
+		if b == nil {
+			return errors.New("error fetching block, blocks bucket does not exist")
+		}
+
+		encodedBlock := b.Get(i.currentHash)
+		block = DeseralizeBlock(encodedBlock)
+		i.currentHash = block.PrevBlockHash
+
+		return nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return block
 }

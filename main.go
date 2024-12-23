@@ -2,22 +2,13 @@ package main
 
 import (
 	"go-blockchain/blockchain"
+	"go-blockchain/cli"
 )
 
 func main() {
 	bc := blockchain.NewBlockchain()
+	defer bc.Db.Close()
 
-	bc.AddBlock("First Block")
-	bc.AddBlock("Second Block")
-	bc.AddBlock("Third Block")
-
-	//traverse and print blocks
-	// for _, block := range bc.Blocks {
-	// 	fmt.Printf("Previous Hash: %x\n", block.PrevBlockHash)
-	// 	fmt.Printf("Data: %s\n", block.Data)
-	// 	fmt.Printf("Hash: %x\n", block.Hash)
-	// 	pow := blockchain.NewProofOfWork(block)
-	// 	fmt.Printf("PoW: %s\n", strconv.FormatBool(pow.Validate()))
-	// 	fmt.Println()
-	// }
+	cli := cli.CLI{bc}
+	cli.Run()
 }
